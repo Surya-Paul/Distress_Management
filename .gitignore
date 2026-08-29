@@ -1,0 +1,5 @@
+.nhaa-local-field-encryption.key
+*.db
+*.db-shm
+*.db-wal
+.env
