@@ -5,6 +5,8 @@ data. New records use SPI, independent support dimensions, evidence, limitations
 and a documented human-review status.
 """
 
+from __future__ import annotations
+
 import json
 import sqlite3
 from datetime import datetime, timedelta
@@ -1269,8 +1271,15 @@ def get_scoped_alerts(actor: AccessContext, *, purpose: str, include_completed=F
     require_case_access(actor, {"state": actor.state, "district": actor.district}, purpose=purpose)
     conn = get_connection()
     try:
-        query = """SELECT a.*, c.state, c.district FROM alerts a JOIN cases c ON a.case_id=c.case_id
-                   WHERE c.state=? AND c.district=? AND c.data_status='ACTIVE'"""
+        query = """
+            SELECT a.*, c.state, c.district,
+                   i.support_signals, i.threshold_version, i.unanswered_follow_up_count,
+                   i.trend_status, i.trend_delta, i.trend_quality_issues, i.evidence
+            FROM alerts a 
+            JOIN cases c ON a.case_id = c.case_id
+            LEFT JOIN interactions i ON a.interaction_id = i.id
+            WHERE c.state=? AND c.district=? AND c.data_status='ACTIVE'
+        """
         params = [actor.state, actor.district]
         if not include_completed:
             query += " AND a.review_status='PENDING'"
@@ -1966,75 +1975,150 @@ def get_dashboard_stats():
     return stats
 
 
-def get_deidentified_dashboard(actor: AccessContext, *, purpose: str):
-    """Return only aggregate, small-cell-suppressed coordination metrics."""
+def get_deidentified_dashboard(actor: AccessContext, *, purpose: str, scope: str | None = None):
+    """Return only aggregate, small-cell-suppressed coordination metrics.
+
+    ``scope`` controls which geographic level is queried:
+
+    - ``"district"`` – actor's own district only (``district_officer``).
+    - ``"state"``    – actor's own state only (``state_administrator``).
+    - ``"national"`` – all states (``national_administrator``).
+    - ``None``       – inferred from role for backward-compatibility.
+
+    All three scopes go through the same WHERE-clause builder and the same
+    suppression block so ``MINIMUM_AGGREGATE_CELL_SIZE`` is guaranteed to apply
+    everywhere.
+    """
     from config import MINIMUM_AGGREGATE_CELL_SIZE
     from src.privacy_architecture import require_aggregate_access
 
-    state_scope = actor.state if actor.role == "state_administrator" else None
+    # ── Resolve scope ────────────────────────────────────────────────────────
+    if scope is None:
+        if actor.role == "state_administrator":
+            scope = "state"
+        elif actor.role == "district_officer":
+            scope = "district"
+        else:
+            scope = "national"
+
+    # ── Authorise ────────────────────────────────────────────────────────────
+    auth_state = actor.state if scope in ("state", "district") else None
+    auth_district = actor.district if scope == "district" else None
     try:
-        require_aggregate_access(actor, purpose=purpose, state=state_scope)
+        require_aggregate_access(
+            actor, purpose=purpose, state=auth_state, district=auth_district
+        )
     except AccessDenied:
         append_security_audit(
-            actor_id=actor.user_id, action="VIEW_DEIDENTIFIED_DASHBOARD", resource_type="aggregate_dashboard",
-            resource_id=state_scope or "national", purpose=purpose, result="DENIED", details={},
+            actor_id=actor.user_id, action="VIEW_DEIDENTIFIED_DASHBOARD",
+            resource_type="aggregate_dashboard",
+            resource_id=f"{auth_state or 'national'}/{auth_district or ''}".rstrip("/"),
+            purpose=purpose, result="DENIED", details={},
         )
         raise
+
+    # ── Build WHERE params and GROUP BY column ───────────────────────────────
+    if scope == "district":
+        where_clause = "WHERE c.data_status = 'ACTIVE' AND c.state = ? AND c.district = ?"
+        count_where = "WHERE data_status = 'ACTIVE' AND state = ? AND district = ?"
+        count_params = [actor.state, actor.district]
+        group_col = "c.district"
+        location_col = "district"
+    elif scope == "state":
+        where_clause = "WHERE c.data_status = 'ACTIVE' AND c.state = ?"
+        count_where = "WHERE data_status = 'ACTIVE' AND state = ?"
+        count_params = [actor.state]
+        group_col = "c.state"
+        location_col = "state"
+    else:  # national
+        where_clause = "WHERE c.data_status = 'ACTIVE'"
+        count_where = "WHERE data_status = 'ACTIVE'"
+        count_params = []
+        group_col = "c.state"
+        location_col = "state"
+
     conn = get_connection()
     try:
-        case_clause, params = ("WHERE state = ?", [state_scope]) if state_scope else ("", [])
-        total_cases = conn.execute(f"SELECT COUNT(*) FROM cases {case_clause} AND data_status = 'ACTIVE'" if case_clause else "SELECT COUNT(*) FROM cases WHERE data_status = 'ACTIVE'", params).fetchone()[0]
+        total_cases = conn.execute(
+            f"SELECT COUNT(*) FROM cases {count_where}", count_params
+        ).fetchone()[0]
+
         # Suppress low-count cells to reduce re-identification risk. No case IDs,
-        # names, contact details, transcripts, audio, or district-level rows are returned.
-        state_rows = conn.execute(
-            """SELECT state, COUNT(*) AS count FROM cases WHERE data_status = 'ACTIVE'
-               GROUP BY state ORDER BY state""" if not state_scope else
-            """SELECT state, COUNT(*) AS count FROM cases WHERE data_status = 'ACTIVE' AND state = ? GROUP BY state""",
-            [] if not state_scope else [state_scope],
+        # names, contact details, transcripts, audio, or sub-district rows returned.
+        location_rows = conn.execute(
+            f"""SELECT {group_col} AS location, COUNT(*) AS count
+                FROM cases c
+                {where_clause}
+                GROUP BY {group_col}
+                ORDER BY {group_col}""",
+            count_params,
         ).fetchall()
+
         priority_rows = conn.execute(
-            """SELECT c.state, i.priority_band, COUNT(*) AS count FROM cases c JOIN (
-                 SELECT case_id, priority_band, ROW_NUMBER() OVER (PARTITION BY case_id ORDER BY timestamp DESC) AS rn
-                 FROM interactions
-               ) i ON i.case_id = c.case_id AND i.rn = 1
-               WHERE c.data_status = 'ACTIVE' """ + ("AND c.state = ? " if state_scope else "") +
-            "GROUP BY c.state, i.priority_band",
-            [] if not state_scope else [state_scope],
+            f"""SELECT {group_col} AS location, i.priority_band, COUNT(*) AS count
+                FROM cases c
+                JOIN (
+                    SELECT case_id, priority_band,
+                           ROW_NUMBER() OVER (PARTITION BY case_id ORDER BY timestamp DESC) AS rn
+                    FROM interactions
+                ) i ON i.case_id = c.case_id AND i.rn = 1
+                {where_clause}
+                GROUP BY {group_col}, i.priority_band""",
+            count_params,
         ).fetchall()
     finally:
         conn.close()
-    suppressed_states = [dict(row) for row in state_rows if row["count"] >= MINIMUM_AGGREGATE_CELL_SIZE]
-    suppressed_priorities = [dict(row) for row in priority_rows if row["count"] >= MINIMUM_AGGREGATE_CELL_SIZE]
+
+    # ── Apply small-cell suppression (single shared block for all scopes) ────
+    suppressed_locations = [
+        dict(row) for row in location_rows if row["count"] >= MINIMUM_AGGREGATE_CELL_SIZE
+    ]
+    suppressed_priorities = [
+        dict(row) for row in priority_rows if row["count"] >= MINIMUM_AGGREGATE_CELL_SIZE
+    ]
+
+    resource_id = (
+        f"{actor.state}/{actor.district}" if scope == "district"
+        else actor.state if scope == "state"
+        else "national"
+    )
     append_security_audit(
-        actor_id=actor.user_id, action="VIEW_DEIDENTIFIED_DASHBOARD", resource_type="aggregate_dashboard",
-        resource_id=state_scope or "national", purpose=purpose, result="ALLOWED",
-        details={"scope": state_scope or "national", "small_cell_threshold": MINIMUM_AGGREGATE_CELL_SIZE},
+        actor_id=actor.user_id, action="VIEW_DEIDENTIFIED_DASHBOARD",
+        resource_type="aggregate_dashboard", resource_id=resource_id,
+        purpose=purpose, result="ALLOWED",
+        details={"scope": scope, "small_cell_threshold": MINIMUM_AGGREGATE_CELL_SIZE},
     )
     return {
-        "scope": "state" if state_scope else "national",
-        "state": state_scope,
+        "scope": scope,
+        "state": actor.state if scope in ("state", "district") else None,
+        "district": actor.district if scope == "district" else None,
+        "location_col": location_col,
         "total_cases": total_cases if total_cases >= MINIMUM_AGGREGATE_CELL_SIZE else "suppressed",
-        "state_counts": suppressed_states,
+        "state_counts": suppressed_locations,   # kept for page-4 backward-compat
+        "location_counts": suppressed_locations,
         "priority_distribution": suppressed_priorities,
         "small_cell_threshold": MINIMUM_AGGREGATE_CELL_SIZE,
     }
 
 
-def export_deidentified_dashboard(actor: AccessContext, *, purpose: str):
+def export_deidentified_dashboard(actor: AccessContext, *, purpose: str, scope: str | None = None):
     """Authorise aggregate-only export; individual and raw-content exports are blocked."""
     from src.privacy_architecture import require_export_access
     try:
         require_export_access(actor, purpose=purpose, export_kind="aggregate")
     except AccessDenied:
         append_security_audit(
-            actor_id=actor.user_id, action="EXPORT_DEIDENTIFIED_DASHBOARD", resource_type="aggregate_dashboard",
+            actor_id=actor.user_id, action="EXPORT_DEIDENTIFIED_DASHBOARD",
+            resource_type="aggregate_dashboard",
             resource_id=actor.state or "national", purpose=purpose, result="DENIED", details={},
         )
         raise
-    result = get_deidentified_dashboard(actor, purpose=purpose)
+    result = get_deidentified_dashboard(actor, purpose=purpose, scope=scope)
     append_security_audit(
-        actor_id=actor.user_id, action="EXPORT_DEIDENTIFIED_DASHBOARD", resource_type="aggregate_dashboard",
-        resource_id=result["state"] or "national", purpose=purpose, result="ALLOWED", details={},
+        actor_id=actor.user_id, action="EXPORT_DEIDENTIFIED_DASHBOARD",
+        resource_type="aggregate_dashboard",
+        resource_id=result.get("district") or result.get("state") or "national",
+        purpose=purpose, result="ALLOWED", details={},
     )
     return result
 

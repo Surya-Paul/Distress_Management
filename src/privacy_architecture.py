@@ -180,13 +180,26 @@ def require_case_access(actor: AccessContext, case: dict, *, purpose: str, write
     return True
 
 
-def require_aggregate_access(actor: AccessContext, *, purpose: str, state=None):
-    """Permit state/national roles to see aggregate, de-identified data only."""
+def require_aggregate_access(actor: AccessContext, *, purpose: str, state=None, district=None):
+    """Permit state/national/district roles to see aggregate, de-identified data only.
+
+    - ``national_administrator``: unrestricted national aggregate access.
+    - ``state_administrator``: aggregate access within their own state only.
+    - ``district_officer``: aggregate access within their own district only.
+      Pass ``state`` and ``district`` to scope the check; the officer's own
+      ``actor.state`` and ``actor.district`` must match exactly.
+    """
     _require_purpose(actor, AGGREGATE_PURPOSES, purpose)
     if actor.role == "national_administrator":
         return True
-    if actor.role == "state_administrator" and (state is None or state == actor.state):
+    if actor.role == "state_administrator" and state is not None and state == actor.state:
         return True
+    if actor.role == "district_officer" and district is not None:
+        if state == actor.state and district == actor.district:
+            return True
+        raise AccessDenied(
+            "A district officer may only view aggregate data for their own district."
+        )
     raise AccessDenied("This role is not authorised for the requested aggregate scope.")
 
 
@@ -200,7 +213,8 @@ def require_audit_access(actor: AccessContext, *, purpose: str):
 def require_export_access(actor: AccessContext, *, purpose: str, export_kind: str):
     if export_kind == "audit":
         return require_audit_access(actor, purpose=purpose)
-    require_aggregate_access(actor, purpose=purpose)
+    # Pass the actor's own state so state_administrator is scoped to their state only.
+    require_aggregate_access(actor, purpose=purpose, state=actor.state, district=actor.district)
     if export_kind != "aggregate":
         raise AccessDenied("Individual case, transcript, and audio exports are disabled by this application boundary.")
     return True

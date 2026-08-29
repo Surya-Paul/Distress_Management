@@ -165,6 +165,20 @@ wellbeing concerns, service-access barriers, and stated contact preferences.
 - Rejected or unavailable model output fails closed to an
   `insufficient_information` record for human source-note review.
 
+## Known Limitations
+
+This table clarifies what is scoped out of this hackathon prototype (shortcuts) versus what reflects genuine safety/architecture claims (design decisions). Judges evaluating the demo should note these bounds.
+
+| Feature / Area | Status in this Prototype | Shortcut or Design Decision? |
+| :--- | :--- | :--- |
+| **Telephony/IVRS** | **Scoped out.** Uses text/audio file uploads instead of real phone integration. | **Shortcut.** A real deployment requires secure telephony/IVRS integration. |
+| **Authentication** | **Mocked.** UI dropdowns simulate roles, districts, and identities. | **Shortcut.** A real deployment requires verified OIDC/SAML authentication. |
+| **Language Support** | **Limited.** Only Hindi and English extraction are verified in the demo. | **Shortcut.** Full deployment needs clinically reviewed prompts for all regional languages. |
+| **Database** | **SQLite.** Runs as an isolated local file database. | **Shortcut.** Production must use `managed_encrypted_postgres` with KMS. |
+| **Automatic Action** | **None.** The system cannot send SMS, call police, or refer cases on its own. | **Design Decision.** Coercive or irreversible automated actions are unsafe. |
+| **Audio Storage** | **Discarded.** Audio is transcribed and then the local copy is deleted. | **Design Decision.** Raw audio creates extreme privacy risks and should not be stored here. |
+| **Signal Extraction** | **Constrained Schema.** Only explicit statements are extracted and mapped to SPI. | **Design Decision.** Prevents LLM hallucinations and prevents the system from making clinical diagnoses. |
+
 ## Important limits
 
 - An SPI is not a diagnosis, a measure of symptom severity, a prediction of

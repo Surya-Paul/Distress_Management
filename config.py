@@ -96,15 +96,18 @@ SERVICE_DIRECTORY_TYPES = ("emergency", "counselling", "protection", "medical", 
 INTERVENTIONS = {
     "physical_safety": (
         "A trained staff member should look at the safety concern using the person's "
-        "preferred safe way of being contacted before discussing any protection options."
+        "preferred safe way of being contacted before discussing any protection options "
+        "(such as witness protection or relocation support)."
     ),
     "wellbeing": (
         "A trained counsellor should check in with the person through an agreed safe "
-        "channel and talk about support options they may want."
+        "channel and talk about support options they may want (such as counselling "
+        "or medical treatment)."
     ),
     "service_access": (
         "A trained coordinator should talk with the person about any barriers to getting "
-        "help and what support they would prefer, before making any referral or changing records."
+        "help and what support they would prefer (such as financial assistance, legal aid, "
+        "or rehabilitation measures), before making any referral or changing records."
     ),
     "trend": (
         "A trained staff member should look at the change alongside the data's limitations "
@@ -142,6 +145,7 @@ LOCAL_DEVELOPMENT_KEY_PATH = os.environ.get("NHAA_LOCAL_FIELD_KEY_PATH", ".nhaa-
 DATABASE_URL = os.environ.get("NHAA_DATABASE_URL")
 MINIMUM_AGGREGATE_CELL_SIZE = int(os.environ.get("NHAA_MINIMUM_AGGREGATE_CELL_SIZE", "5"))
 DEFAULT_RETENTION_DAYS = int(os.environ.get("NHAA_DEFAULT_RETENTION_DAYS", "2555"))
+PROJECTION_DAYS = int(os.environ.get("NHAA_PROJECTION_DAYS", "14"))
 
 ROLE_NAMES = (
     "counsellor", "district_officer", "state_administrator", "national_administrator", "auditor",

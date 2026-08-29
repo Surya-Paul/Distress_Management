@@ -16,7 +16,7 @@ from src.database import (
 from src.translations import t
 from src.groq_client import extract_support_signals, transcribe_audio, translate_to_english
 from src.acoustic import build_audio_analysis_metadata, extract_acoustic_features_from_bytes, get_acoustic_feature_summary
-from src.scoring import assess_spi_trend, compute_support_priority_indicator
+from src.scoring import assess_spi_trend, compute_support_priority_indicator, project_spi_trajectory
 from src.ui_access import get_active_actor
 
 
@@ -406,6 +406,19 @@ if st.button(
         "changes over time, and missed planned check-ins. "
         "Wellbeing check-in scores (PHQ-9 / GAD-7) are kept separate and never used here."
     )
+
+    # Build full scored history including the just-submitted record
+    all_scored = [r for r in prior_interactions if r.get("support_priority_indicator") is not None]
+    all_scored.append(current_context)
+    if len(all_scored) >= 3:
+        projection = project_spi_trajectory(all_scored, active_spi_config)
+        if projection["status"] == "projected_urgent":
+            st.warning(
+                f"\U0001f4c8 **Trajectory projection:** {projection['message']}\n\n"
+                f"*{projection['caveat']}*"
+            )
+        elif projection["status"] in ("no_crossing", "already_urgent"):
+            st.info(f"\U0001f4c9 **Trajectory projection:** {projection['message']}")
 
     if tasks:
         st.warning("Staff review task(s) created. This system has not contacted anyone, made a referral, or changed any case records.")

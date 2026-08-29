@@ -5,3 +5,4 @@ numpy>=1.26.0
 python-dotenv>=1.0.0
 plotly>=5.22.0
 cryptography>=42.0.0
+opensmile>=2.5.0

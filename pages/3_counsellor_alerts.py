@@ -1,10 +1,13 @@
 """Human-review queue for non-diagnostic support-priority tasks."""
 
+import json
 from datetime import datetime
 
 import streamlit as st
 
+from config import get_spi_threshold_config
 from src.database import complete_scoped_review, get_scoped_alerts
+from src.scoring import compute_support_priority_indicator
 from src.translations import t
 from src.ui_access import get_active_actor
 
@@ -83,6 +86,45 @@ for task in tasks:
         """,
         unsafe_allow_html=True,
     )
+    
+    support_signals_str = task.get("support_signals")
+    if support_signals_str:
+        try:
+            signals = json.loads(support_signals_str)
+            trend = {
+                "status": task.get("trend_status"),
+                "delta": task.get("trend_delta"),
+                "quality_issues": json.loads(task.get("trend_quality_issues") or "[]"),
+                "comparable": task.get("trend_status") in {"worsening", "stable", "improving"}
+            }
+            assessment = compute_support_priority_indicator(
+                signals,
+                threshold_config=get_spi_threshold_config(task.get("threshold_version")),
+                trend=trend,
+                unanswered_follow_up_count=task.get("unanswered_follow_up_count", 0)
+            )
+            contributions = assessment.get("contributions", {})
+            evidence_list = json.loads(task.get("evidence") or "[]")
+            
+            with st.expander(f"Priority breakdown (SPI: {assessment.get('spi', 0)})", expanded=True):
+                sorted_components = sorted(
+                    [(k.replace("_", " ").capitalize(), v) for k, v in contributions.items() if v > 0],
+                    key=lambda x: x[1], reverse=True
+                )
+                if sorted_components:
+                    st.markdown("**What drove this priority level?**")
+                    for name, val in sorted_components:
+                        st.markdown(f"- **{name}:** +{val} points")
+                else:
+                    st.markdown("*No specific components contributed to the base score.*")
+                
+                if evidence_list:
+                    st.markdown("**Supporting evidence extracted:**")
+                    for ev in evidence_list:
+                        signal = ev.get("signal") or ev.get("dimension") or "Unknown"
+                        st.markdown(f"- *\"{ev.get('quote', 'No quote provided')}\"* ({signal.replace('_', ' ').capitalize()})")
+        except Exception:
+            pass
 
     if completed:
         st.caption(f"Reviewed by {task.get('reviewer_name') or 'not recorded'} on {task.get('reviewed_at') or 'not recorded'}.")

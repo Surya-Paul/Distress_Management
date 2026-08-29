@@ -14,7 +14,7 @@ from src.database import (
     get_scoped_interactions,
     save_scoped_interaction_reviewer_override,
 )
-from src.scoring import assess_spi_trend
+from src.scoring import assess_spi_trend, project_spi_trajectory
 from src.translations import t
 from src.ui_access import get_active_actor
 
@@ -93,6 +93,16 @@ if len(scored_df) >= 2:
         summary_cols[2].metric("Change", "Lower estimate", delta="Still review source notes", delta_color="normal")
     else:
         summary_cols[2].metric("Change", "Similar estimate", delta="No automatic conclusion")
+
+if len(scored_interactions) >= 3:
+    projection = project_spi_trajectory(scored_interactions, active_spi_config)
+    if projection["status"] == "projected_urgent":
+        st.warning(
+            f"📈 **Trajectory projection:** {projection['message']}\n\n"
+            f"*{projection['caveat']}*"
+        )
+    elif projection["status"] in ("no_crossing", "already_urgent"):
+        st.info(f"📉 **Trajectory projection:** {projection['message']}")
 
 if scored_df.empty:
     st.info("This case has no compatible follow-up priority records yet. Older records from a previous version are not shown here.")

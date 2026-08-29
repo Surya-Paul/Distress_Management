@@ -281,3 +281,225 @@ def compute_support_priority_indicator(signals, *, threshold_config=None, trend=
             "No score on its own can be used to force an action or make a decision that cannot be undone."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Forward-looking trajectory projection
+# ---------------------------------------------------------------------------
+
+# Maximum number of recent comparable data points to use for the regression.
+# Using too many points would anchor the trend on old baseline data.
+_MAX_PROJECTION_POINTS = 5
+
+# Minimum number of data points required for a regression.
+_MIN_PROJECTION_POINTS = 3
+
+
+def project_spi_trajectory(scored_history, threshold_config=None, projection_days=None):
+    """Project whether the SPI trend will cross the urgent threshold within N days.
+
+    This is a simple linear regression over the most recent comparable SPI
+    scores.  It is intentionally basic: an honest, explainable model is more
+    appropriate here than a complex one that obscures its reasoning.
+
+    Returns a dict with:
+      - ``"status"``: one of ``"projected_urgent"``, ``"no_crossing"``,
+        ``"insufficient_data"``, or ``"not_comparable"``.
+      - ``"projected_urgent_date"``: ISO date string if crossing is projected.
+      - ``"slope_per_day"``: SPI change per day from the regression.
+      - ``"days_until_urgent"``: estimated days until the threshold crossing.
+      - ``"data_points_used"``: how many points were used.
+      - ``"message"``: human-readable summary, always framed as a projection
+        based on limited data, never as a certainty or automatic action.
+      - ``"caveat"``: a static disclaimer for UI display.
+
+    The function enforces the same comparability rules used by
+    ``assess_spi_trend``: channel, language, confidence, and score-version
+    must be consistent across the data points used.
+    """
+    from datetime import datetime, timedelta
+
+    from config import PROJECTION_DAYS
+
+    config = normalise_threshold_config(threshold_config)
+    if projection_days is None:
+        projection_days = PROJECTION_DAYS
+    urgent_threshold = config["urgent_review_threshold"]
+
+    result_base = {
+        "status": "insufficient_data",
+        "projected_urgent_date": None,
+        "slope_per_day": None,
+        "days_until_urgent": None,
+        "data_points_used": 0,
+        "message": "Not enough comparable data points to project a trend.",
+        "caveat": (
+            "This projection is a simple statistical extrapolation from a small "
+            "number of data points. It is not a prediction of what will happen. "
+            "It only suggests that earlier human review may be worthwhile."
+        ),
+    }
+
+    if not isinstance(scored_history, list) or len(scored_history) < _MIN_PROJECTION_POINTS:
+        return result_base
+
+    # ── Filter to comparable records ─────────────────────────────────────
+    # Walk backward through history and collect up to _MAX_PROJECTION_POINTS
+    # records that share channel, language, confidence, and score version with
+    # the most recent record.
+    candidates = []
+    for record in reversed(scored_history):
+        if not isinstance(record, dict):
+            continue
+        spi = record.get("support_priority_indicator")
+        ts = record.get("timestamp")
+        if spi is None or ts is None:
+            continue
+        candidates.append(record)
+
+    if len(candidates) < _MIN_PROJECTION_POINTS:
+        return result_base
+
+    # The reference record is the most recent one.
+    reference = candidates[0]
+    ref_channel = reference.get("channel")
+    ref_language = reference.get("analysis_language")
+    ref_version = reference.get("score_version") or reference.get("threshold_version")
+
+    comparable = []
+    for record in candidates:
+        # Enforce same channel
+        if ref_channel and record.get("channel") and record["channel"] != ref_channel:
+            continue
+        # Enforce same language
+        if ref_language and record.get("analysis_language") and record["analysis_language"] != ref_language:
+            continue
+        # Enforce same score version
+        rec_version = record.get("score_version") or record.get("threshold_version")
+        if ref_version and rec_version and rec_version != ref_version:
+            continue
+        # Skip low-confidence records
+        if record.get("confidence") not in {None, "medium", "high"}:
+            continue
+        comparable.append(record)
+        if len(comparable) >= _MAX_PROJECTION_POINTS:
+            break
+
+    if len(comparable) < _MIN_PROJECTION_POINTS:
+        result_base["status"] = "not_comparable"
+        result_base["message"] = (
+            "Recent data points are not comparable (channel, language, or "
+            "scoring version changed), so no trajectory can be projected."
+        )
+        return result_base
+
+    # ── Parse timestamps and SPI values ──────────────────────────────────
+    points = []  # list of (days_offset, spi_value)
+    for record in comparable:
+        ts = record["timestamp"]
+        if isinstance(ts, str):
+            # Try common ISO formats
+            for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    ts = datetime.strptime(ts, fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                # Try fromisoformat on Python 3.7+ (handles most ISO strings)
+                try:
+                    ts = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    continue
+        if not isinstance(ts, datetime):
+            continue
+        try:
+            spi_val = float(record["support_priority_indicator"])
+        except (TypeError, ValueError):
+            continue
+        points.append((ts, spi_val))
+
+    if len(points) < _MIN_PROJECTION_POINTS:
+        return result_base
+
+    # Sort chronologically
+    points.sort(key=lambda p: p[0])
+    t0 = points[0][0]
+    # Convert to (days_from_start, spi)
+    xy = []
+    for ts, spi_val in points:
+        days = (ts - t0).total_seconds() / 86400.0
+        xy.append((days, spi_val))
+
+    # Check that there is meaningful time spread (at least 1 day total)
+    if xy[-1][0] - xy[0][0] < 1.0:
+        result_base["message"] = (
+            "All comparable data points are within the same day; a trajectory "
+            "over time cannot be meaningfully projected."
+        )
+        return result_base
+
+    # ── Least-squares linear regression ──────────────────────────────────
+    n = len(xy)
+    sum_x = sum(x for x, _ in xy)
+    sum_y = sum(y for _, y in xy)
+    sum_xx = sum(x * x for x, _ in xy)
+    sum_xy = sum(x * y for x, y in xy)
+
+    denom = n * sum_xx - sum_x * sum_x
+    if abs(denom) < 1e-12:
+        result_base["message"] = "Not enough temporal variation to project a trend."
+        return result_base
+
+    slope = (n * sum_xy - sum_x * sum_y) / denom      # SPI per day
+    intercept = (sum_y - slope * sum_x) / n
+
+    slope = round(slope, 4)
+    last_day = xy[-1][0]
+    last_spi = xy[-1][1]
+
+    # ── Project crossing ─────────────────────────────────────────────────
+    result = {**result_base, "slope_per_day": slope, "data_points_used": n}
+
+    if last_spi >= urgent_threshold:
+        result["status"] = "already_urgent"
+        result["message"] = (
+            "The current SPI already meets or exceeds the urgent review "
+            "threshold. No forward projection is needed."
+        )
+        return result
+
+    if slope <= 0:
+        result["status"] = "no_crossing"
+        result["message"] = (
+            "The recent trend is flat or decreasing; no crossing of the "
+            "urgent threshold is projected at this rate."
+        )
+        return result
+
+    # Days from last point to threshold crossing
+    days_to_cross = (urgent_threshold - last_spi) / slope
+    projected_date = points[-1][0] + timedelta(days=days_to_cross)
+
+    result["days_until_urgent"] = round(days_to_cross, 1)
+
+    if days_to_cross <= projection_days:
+        result["status"] = "projected_urgent"
+        result["projected_urgent_date"] = projected_date.strftime("%Y-%m-%d")
+        result["message"] = (
+            f"Based on the last {n} comparable records, the support priority "
+            f"indicator is projected to reach the urgent review threshold "
+            f"around {projected_date.strftime('%d %b %Y')} if this trend "
+            f"continues at the current rate ({slope:+.1f} points/day). "
+            f"This is a statistical projection from limited data — not a "
+            f"certainty. Earlier human review may be worthwhile."
+        )
+    else:
+        result["status"] = "no_crossing"
+        result["message"] = (
+            f"At the current rate ({slope:+.1f} points/day), the urgent "
+            f"threshold would not be reached within the next {projection_days} "
+            f"days."
+        )
+
+    return result
