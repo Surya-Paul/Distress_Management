@@ -96,8 +96,8 @@ tab_start, tab_continue, tab_languages = st.tabs([
 
 # ========================= TAB 1: START NEW CHECK-IN =========================
 with tab_start:
-    st.subheader("Begin a New Check-In")
-    st.caption("Select a case, channel, and language. Consent and safety preferences are collected first.")
+    st.subheader(t("p9_begin_new"))
+    st.caption(t("p9_select_case_channel"))
 
     # Case selection
     conn = get_connection()
@@ -107,10 +107,10 @@ with tab_start:
         conn.close()
 
     if not cases:
-        st.info("No active cases. Create a case through the Record Consented Interaction page first.")
+        st.info(t("p9_no_active_cases"))
     else:
         case_options = {f"{c['case_id']}  ({c['state']} / {c['district']})": c["case_id"] for c in cases}
-        selected_case_label = st.selectbox("Select case", list(case_options.keys()), key="checkin_case")
+        selected_case_label = st.selectbox(t("p9_select_case"), list(case_options.keys()), key="checkin_case")
         selected_case_id = case_options[selected_case_label]
 
         col_channel, col_lang = st.columns(2)
@@ -123,7 +123,7 @@ with tab_start:
             )
         with col_lang:
             lang_options = {v["autonym"] + f" ({v['name']})": code for code, v in CHECKIN_BASE_LANGUAGE_PACKS.items()}
-            lang_label = st.selectbox("Preferred language", list(lang_options.keys()), key="checkin_lang")
+            lang_label = st.selectbox(t("p9_preferred_language"), list(lang_options.keys()), key="checkin_lang")
             lang_code = lang_options[lang_label]
 
         # Show the control statement in the chosen language
@@ -189,7 +189,7 @@ with tab_start:
             )
 
             # Submit
-            if st.button("✅ Begin Check-In", type="primary", key="checkin_start_btn"):
+            if st.button(t("p9_btn_begin_checkin"), type="primary", key="checkin_start_btn"):
                 try:
                     payload = {
                         "channel": channel,
@@ -207,12 +207,12 @@ with tab_start:
                 except CheckinJourneyValidationError as e:
                     st.error(f"Validation error: {e}")
         else:
-            st.info("Consent is required to begin a check-in. The survivor may decline at any time.")
+            st.info(t("p9_consent_required"))
 
 
 # ========================= TAB 2: CONTINUE / COMPLETE =========================
 with tab_continue:
-    st.subheader("Continue a Check-In")
+    st.subheader(t("p9_continue_checkin"))
 
     # Find open sessions
     conn = get_connection()
@@ -224,13 +224,13 @@ with tab_continue:
         conn.close()
 
     if not open_sessions:
-        st.info("No open check-in sessions. Start a new check-in in the first tab.")
+        st.info(t("p9_no_open_sessions"))
     else:
         session_options = {
             f"#{s['id']}  {s['case_id']} • {CHECKIN_CHANNEL_LABELS.get(s['channel'], s['channel'])} • {CHECKIN_BASE_LANGUAGE_PACKS.get(s['language_code'], {}).get('autonym', s['language_code'])} • {s['status']}": s["id"]
             for s in open_sessions
         }
-        selected_session_label = st.selectbox("Select session", list(session_options.keys()), key="continue_session")
+        selected_session_label = st.selectbox(t("p9_select_session"), list(session_options.keys()), key="continue_session")
         session_id = session_options[selected_session_label]
         session = get_checkin_session(session_id)
         lang_code = session["language_code"]
@@ -241,7 +241,7 @@ with tab_continue:
         guidance = channel_delivery_guidance(
             lang_code, channel, programme_mention_allowed=bool(session["programme_mention_allowed"]),
         )
-        with st.expander("📡 How to deliver this check-in", expanded=False):
+        with st.expander(t("p9_how_to_deliver"), expanded=False):
             st.markdown(f"**First touch:** {guidance['first_touch']}")
             for rule in guidance["rules"]:
                 st.markdown(f"- {rule}")
@@ -288,7 +288,7 @@ with tab_continue:
                         # IVRS-style spoken options
                         for j, opt in enumerate(step["includes"]):
                             st.markdown(f"🔊 Press **{j + 1}** for: *{opt}*")
-                        st.markdown("🔊 Press **7** to repeat • **0** for a trained person • **8** to pause • **9** to stop")
+                        st.markdown(t("p9_ivrs_instructions"))
                     else:
                         # Interactive UI
                         for opt in step["includes"]:
@@ -307,7 +307,7 @@ with tab_continue:
                             label_visibility="collapsed",
                         )
                         controls = _render_step_controls(lang_code, channel, step_name, prefix)
-                        if st.button("Submit", key=f"{prefix}_submit", type="primary"):
+                        if st.button(t("p9_submit"), key=f"{prefix}_submit", type="primary"):
                             if controls["pause"]:
                                 update_checkin_session(session_id, validate_checkin_update({"control": "pause"}))
                                 st.rerun()
@@ -331,7 +331,7 @@ with tab_continue:
                             label_visibility="collapsed",
                         )
                         controls = _render_step_controls(lang_code, channel, step_name, prefix)
-                        if st.button("Submit", key=f"{prefix}_submit", type="primary"):
+                        if st.button(t("p9_submit"), key=f"{prefix}_submit", type="primary"):
                             if controls["pause"]:
                                 update_checkin_session(session_id, validate_checkin_update({"control": "pause"}))
                                 st.rerun()
@@ -351,7 +351,7 @@ with tab_continue:
                             label_visibility="collapsed",
                         )
                         controls = _render_step_controls(lang_code, channel, step_name, prefix)
-                        if st.button("Submit", key=f"{prefix}_submit", type="primary"):
+                        if st.button(t("p9_submit"), key=f"{prefix}_submit", type="primary"):
                             if controls["pause"]:
                                 update_checkin_session(session_id, validate_checkin_update({"control": "pause"}))
                                 st.rerun()
@@ -367,24 +367,24 @@ with tab_continue:
 
         # Complete the check-in
         st.divider()
-        if st.button("✅ Finish this check-in", type="primary", key="complete_checkin"):
+        if st.button(t("p9_finish_checkin"), type="primary", key="complete_checkin"):
             update_checkin_session(session_id, validate_checkin_update({"control": "complete"}))
-            st.success("Check-in marked as complete.")
+            st.success(t("p9_checkin_complete"))
             st.rerun()
 
         # Session history
-        with st.expander("📜 Answers recorded so far", expanded=False):
+        with st.expander(t("p9_answers_recorded"), expanded=False):
             if session.get("responses"):
                 for r in session["responses"]:
                     st.markdown(f"- **{r['response_key']}**: `{r['response_value']}` _(at {r['recorded_at']})_")
             else:
-                st.info("No responses recorded yet.")
+                st.info(t("p9_no_responses"))
 
 
 # ========================= TAB 3: LANGUAGE & ACCESSIBILITY REVIEW =========================
 with tab_languages:
-    st.subheader("Language support status")
-    st.caption("Each language is evaluated independently. A language is never treated as validated merely because it shares a script or model with another.")
+    st.subheader(t("p9_language_status"))
+    st.caption(t("p9_language_status_help"))
 
     # Side-by-side language comparison
     catalog = language_catalog()

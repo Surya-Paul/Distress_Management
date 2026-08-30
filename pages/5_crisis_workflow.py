@@ -87,20 +87,20 @@ for event in events:
 
         left, right = st.columns(2)
         with left:
-            st.markdown("**What was shared and how reliable it is**")
+            st.markdown(t("p5_what_shared"))
             evidence = event.get("evidence_snapshot") or []
             if evidence:
                 for item in evidence:
                     st.write(f"- “{item.get('quote', '')}” ({item.get('confidence', 'low')} confidence)")
             else:
-                st.caption("No evidence snapshot is available. Review the source notes before acting.")
+                st.caption(t("p5_no_evidence"))
             context = event.get("context_snapshot") or {}
             st.caption(f"How sure the system is: {context.get('confidence', 'low')}")
             for limitation in context.get("limitations", []):
                 st.caption(f"Keep in mind: {limitation}")
 
         with right:
-            st.markdown("**Safe ways to reach this person**")
+            st.markdown(t("p5_safe_ways"))
             protocol = get_case_safe_contact_protocol(event["case_id"])
             if protocol:
                 st.write(f"- Label: {protocol['protocol_label']}")
@@ -110,7 +110,7 @@ for event in events:
                 st.write(f"- Do not contact third parties: {'Yes' if protocol['do_not_contact_third_parties'] else 'No'}")
                 st.write(f"- Max attempts: {protocol['maximum_attempts']}; retry interval: {protocol['minimum_retry_minutes']} minutes")
             else:
-                st.warning("No safe way to contact this person has been recorded. Do not contact them.")
+                st.warning(t("p5_no_safe_way"))
 
         contact_preferences = context.get("contact_preferences", {})
         if contact_preferences.get("status") == "detected":
@@ -120,20 +120,20 @@ for event in events:
                 f"constraints: {', '.join(contact_preferences.get('safe_contact_constraints') or []) or 'none extracted'}."
             )
 
-        with st.expander("Case history for review", expanded=False):
+        with st.expander(t("p5_case_history"), expanded=False):
             history = get_scoped_interactions(actor, event["case_id"], purpose="crisis_review")
             if not history:
-                st.caption("No interaction history is available.")
+                st.caption(t("p5_no_history"))
             for record in history[-5:]:
                 st.write(
                     f"- {_format_time(record.get('timestamp'))}: Priority {record.get('support_priority_indicator', 0):.0f}/100; "
                     f"confidence {record.get('confidence') or 'low'}; channel {record.get('channel') or 'not recorded'}"
                 )
 
-        with st.expander("Verified local support directory", expanded=False):
+        with st.expander(t("p5_local_support"), expanded=False):
             services = get_service_directory_entries(event["state"], event["district"], verified_only=True)
             if not services:
-                st.caption("No verified local services are configured. Do not substitute unverified contact information.")
+                st.caption(t("p5_no_local_services"))
             for service in services:
                 st.write(
                     f"- **{service['service_type'].replace('_', ' ').title()}** — {service['service_name']} "
@@ -142,23 +142,25 @@ for event in events:
                 if service.get("availability_notes"):
                     st.caption(service["availability_notes"])
 
-        with st.expander("Internal referral history", expanded=False):
+        with st.expander(t("p5_internal_referral"), expanded=False):
             escalations = get_crisis_escalations(event["id"])
             for escalation in escalations:
                 st.write(
                     f"- {_format_time(escalation['created_at'])}: {escalation['channel']} — "
                     f"{escalation['status']}. {escalation['reason']}"
                 )
-            st.caption("Only secure internal queue escalation is automated. No outward channel is available here.")
+            st.caption(t("p5_no_outward_channel"))
 
         if event["status"] == "PENDING_ASSIGNMENT":
             with st.form(f"assign_crisis_{event['id']}"):
                 assignee = st.text_input("Accountable reviewer name or authorised staff ID")
-                role = st.selectbox("Accountable role", ["Counsellor", "District safety officer"])
+                roles = ["Counsellor", "District safety officer"]
+                role_labels = {"Counsellor": t("p5_counsellor"), "District safety officer": t("p5_district_safety_officer")}
+                role = st.selectbox(t("p5_accountable_role"), roles, format_func=lambda x: role_labels.get(x, x))
                 if st.form_submit_button("Assign staff member"):
                     try:
                         assign_scoped_crisis_event(actor, event["id"], assignee, role, purpose="crisis_review")
-                        st.success("Staff member assigned. No outreach was sent.")
+                        st.success(t("p5_staff_assigned"))
                         st.rerun()
                     except ValueError as error:
                         st.error(str(error))
@@ -166,21 +168,21 @@ for event in events:
         if event["status"] == "AWAITING_ACKNOWLEDGEMENT":
             with st.form(f"ack_crisis_{event['id']}"):
                 st.caption(f"Verified reviewer context: {actor.user_id}")
-                attestation = st.checkbox("I am the assigned reviewer and have reviewed the evidence, limitations, consent, and safe-contact protocol.")
+                attestation = st.checkbox(t("p5_reviewer_attestation"))
                 if st.form_submit_button("Confirm you've seen this"):
                     if not attestation:
-                        st.error("Confirm the acknowledgement attestation first.")
+                        st.error(t("p5_confirm_attestation"))
                     else:
                         try:
                             acknowledge_scoped_crisis_event(actor, event["id"], purpose="crisis_review")
-                            st.success("Acknowledgement recorded. No automatic outreach was performed.")
+                            st.success(t("p5_ack_recorded"))
                             st.rerun()
                         except ValueError as error:
                             st.error(str(error))
 
         if event["status"] == "ACKNOWLEDGED":
             attempts = get_safe_contact_attempts(event["id"])
-            st.markdown("**Safe-contact attempt log**")
+            st.markdown(t("p5_contact_log"))
             if attempts:
                 for attempt in attempts:
                     st.write(
@@ -190,23 +192,25 @@ for event in events:
                     if attempt.get("next_eligible_at"):
                         st.caption(f"Next eligible attempt: {_format_time(attempt['next_eligible_at'])}")
             else:
-                st.caption("No contact attempt has been logged.")
+                st.caption(t("p5_no_contact_attempt"))
 
-            with st.expander("Record a human-performed safe-contact attempt", expanded=False):
+            with st.expander(t("p5_record_attempt"), expanded=False):
                 with st.form(f"contact_attempt_{event['id']}"):
                     st.caption(f"Verified reviewer context: {actor.user_id}")
-                    channel = st.selectbox("Approved safe channel", list(SAFE_OUTREACH_CHANNELS), key=f"contact_channel_{event['id']}")
-                    outcome = st.selectbox("Outcome", ["REACHED", "NOT_REACHED"], key=f"contact_outcome_{event['id']}")
+                    channel = st.selectbox(t("p5_approved_channel"), list(SAFE_OUTREACH_CHANNELS), key=f"contact_channel_{event['id']}")
+                    outcomes = ["REACHED", "NOT_REACHED"]
+                    outcome_labels = {"REACHED": t("p5_reached"), "NOT_REACHED": t("p5_not_reached")}
+                    outcome = st.selectbox(t("p5_outcome"), outcomes, format_func=lambda x: outcome_labels.get(x, x), key=f"contact_outcome_{event['id']}")
                     notes = st.text_area("Minimal attempt note", key=f"contact_notes_{event['id']}")
                     if st.form_submit_button("Record attempt only"):
                         try:
                             record_scoped_safe_contact_attempt(actor, event["id"], channel, outcome, notes, purpose="crisis_review")
-                            st.success("Attempt logged. This system did not initiate the contact.")
+                            st.success(t("p5_attempt_logged"))
                             st.rerun()
                         except ValueError as error:
                             st.error(str(error))
 
-            with st.expander("Mark as resolved", expanded=False):
+            with st.expander(t("p5_mark_resolved"), expanded=False):
                 with st.form(f"close_crisis_{event['id']}"):
                     st.caption(f"Verified reviewer context: {actor.user_id}")
                     action_taken = st.text_area("Action taken")
@@ -219,7 +223,7 @@ for event in events:
                                 actor, event["id"], action_taken, outcome, follow_up_at, closure_rationale,
                                 purpose="crisis_review",
                             )
-                            st.success("Crisis event closed with an auditable human outcome.")
+                            st.success(t("p5_event_closed"))
                             st.rerun()
                         except ValueError as error:
                             st.error(str(error))
