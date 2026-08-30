@@ -80,7 +80,7 @@ for task in tasks:
             <div style="margin-top:.5rem;"><strong>Case:</strong> {task['case_id']} • {task.get('state', '')} / {task.get('district', '')}</div>
             <div style="margin-top:.6rem;">{task['reason']}</div>
             <div style="margin-top:.7rem; padding:.6rem; background:rgba(255,255,255,.03); border-radius:6px;">
-                <strong>Suggested next step — only a suggestion, not an instruction:</strong><br/>{task.get('recommended_intervention', '')}
+                <strong>{task.get('recommended_intervention', '')}</strong>
             </div>
         </div>
         """,

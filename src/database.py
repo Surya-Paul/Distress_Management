@@ -71,7 +71,8 @@ def init_db():
             state TEXT NOT NULL,
             district TEXT NOT NULL,
             registered_at TIMESTAMP NOT NULL,
-            data_status TEXT NOT NULL DEFAULT 'ACTIVE'
+            data_status TEXT NOT NULL DEFAULT 'ACTIVE',
+            case_type TEXT NOT NULL DEFAULT 'other'
         );
 
         CREATE TABLE IF NOT EXISTS interactions (
@@ -465,7 +466,10 @@ def init_db():
     )
 
     # Additive migration for a database created by the prior prototype.
-    for definition in ["data_status TEXT NOT NULL DEFAULT 'ACTIVE'"]:
+    for definition in [
+        "data_status TEXT NOT NULL DEFAULT 'ACTIVE'",
+        "case_type TEXT NOT NULL DEFAULT 'other'",
+    ]:
         _ensure_column(conn, "cases", definition)
     for definition in [
         "transcript_ciphertext TEXT",
@@ -561,20 +565,20 @@ def init_db():
     conn.close()
 
 
-def insert_case(case_id, state, district, registered_at=None):
+def insert_case(case_id, state, district, registered_at=None, case_type="other"):
     """Insert an opaque case record; contact information belongs outside this demo."""
     conn = get_connection()
     try:
         conn.execute(
-            "INSERT OR IGNORE INTO cases (case_id, state, district, registered_at) VALUES (?, ?, ?, ?)",
-            (case_id, state, district, registered_at or datetime.now().isoformat()),
+            "INSERT OR IGNORE INTO cases (case_id, state, district, registered_at, case_type) VALUES (?, ?, ?, ?, ?)",
+            (case_id, state, district, registered_at or datetime.now().isoformat(), case_type),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def create_scoped_case(actor: AccessContext, state: str, district: str, *, purpose: str, case_id=None):
+def create_scoped_case(actor: AccessContext, state: str, district: str, *, purpose: str, case_id=None, case_type="other"):
     """Create an opaque internal case ID within the caseworker's own district."""
     provisional = {"state": state, "district": district}
     try:
@@ -582,12 +586,12 @@ def create_scoped_case(actor: AccessContext, state: str, district: str, *, purpo
     except AccessDenied:
         append_security_audit(
             actor_id=actor.user_id, action="CREATE_CASE", resource_type="case", resource_id="new",
-            purpose=purpose, result="DENIED", details={"state": state, "district": district},
+            purpose=purpose, result="DENIED", details={"state": state, "district": district, "case_type": case_type},
         )
         raise
     from src.privacy_architecture import make_opaque_id
     opaque_id = case_id or make_opaque_id("CASE")
-    insert_case(opaque_id, state, district)
+    insert_case(opaque_id, state, district, case_type=case_type)
     append_security_audit(
         actor_id=actor.user_id, action="CREATE_CASE", resource_type="case", resource_id=opaque_id,
         case_id=opaque_id, purpose=purpose, result="ALLOWED", details={"state": state, "district": district},
@@ -629,7 +633,7 @@ def get_scoped_cases(actor: AccessContext, *, purpose: str):
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT case_id, state, district, registered_at, data_status FROM cases
+            """SELECT case_id, state, district, registered_at, data_status, case_type FROM cases
                WHERE state = ? AND district = ? AND data_status = 'ACTIVE' ORDER BY registered_at DESC""",
             (actor.state, actor.district),
         ).fetchall()
@@ -896,6 +900,17 @@ def get_validated_screenings_for_case(case_id):
         for field, fallback in (("questions_administered", []), ("responses", {}), ("skipped_item_ids", []), ("reviewer_override", {})):
             record[field] = _parse_json_field(record, field, fallback)
         records.append(record)
+    return records
+
+
+def get_scoped_validated_screenings(actor: AccessContext, case_id: str, *, purpose: str):
+    """Return in-scope validated screenings."""
+    get_scoped_case(actor, case_id, purpose=purpose)
+    records = get_validated_screenings_for_case(case_id)
+    append_security_audit(
+        actor_id=actor.user_id, action="VIEW_VALIDATED_SCREENINGS", resource_type="validated_screening",
+        resource_id=case_id, case_id=case_id, purpose=purpose, result="ALLOWED", details={"count": len(records)},
+    )
     return records
 
 
@@ -2066,6 +2081,27 @@ def get_deidentified_dashboard(actor: AccessContext, *, purpose: str, scope: str
                 GROUP BY {group_col}, i.priority_band""",
             count_params,
         ).fetchall()
+
+        case_type_rows = conn.execute(
+            f"""SELECT c.case_type, COUNT(*) AS count
+                FROM cases c
+                {where_clause}
+                GROUP BY c.case_type""",
+            count_params,
+        ).fetchall()
+
+        case_type_priority_rows = conn.execute(
+            f"""SELECT c.case_type, i.priority_band, COUNT(*) AS count
+                FROM cases c
+                JOIN (
+                    SELECT case_id, priority_band,
+                           ROW_NUMBER() OVER (PARTITION BY case_id ORDER BY timestamp DESC) AS rn
+                    FROM interactions
+                ) i ON i.case_id = c.case_id AND i.rn = 1
+                {where_clause}
+                GROUP BY c.case_type, i.priority_band""",
+            count_params,
+        ).fetchall()
     finally:
         conn.close()
 
@@ -2075,6 +2111,12 @@ def get_deidentified_dashboard(actor: AccessContext, *, purpose: str, scope: str
     ]
     suppressed_priorities = [
         dict(row) for row in priority_rows if row["count"] >= MINIMUM_AGGREGATE_CELL_SIZE
+    ]
+    suppressed_case_types = [
+        dict(row) for row in case_type_rows if row["count"] >= MINIMUM_AGGREGATE_CELL_SIZE
+    ]
+    suppressed_case_type_priorities = [
+        dict(row) for row in case_type_priority_rows if row["count"] >= MINIMUM_AGGREGATE_CELL_SIZE
     ]
 
     resource_id = (
@@ -2097,6 +2139,8 @@ def get_deidentified_dashboard(actor: AccessContext, *, purpose: str, scope: str
         "state_counts": suppressed_locations,   # kept for page-4 backward-compat
         "location_counts": suppressed_locations,
         "priority_distribution": suppressed_priorities,
+        "case_type_distribution": suppressed_case_types,
+        "case_type_priority_distribution": suppressed_case_type_priorities,
         "small_cell_threshold": MINIMUM_AGGREGATE_CELL_SIZE,
     }
 

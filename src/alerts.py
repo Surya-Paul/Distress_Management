@@ -5,7 +5,7 @@ protection, counselling, legal, compensation, or rehabilitation action.
 """
 
 from config import (
-    INTERVENTIONS,
+    INTERVENTION_CATEGORIES,
     PROMPT_REVIEW_THRESHOLD,
     URGENT_REVIEW_THRESHOLD,
 )
@@ -31,6 +31,14 @@ def _create_task(case_id, interaction_id, level, task_type, reason, suggestion):
 
 def _priority_level(score, urgent_threshold=URGENT_REVIEW_THRESHOLD):
     return "URGENT" if score >= urgent_threshold else "PRIORITY"
+
+
+def _format_intervention(dimension):
+    categories = INTERVENTION_CATEGORIES.get(dimension, [])
+    if not categories:
+        return ""
+    labels = [cat.replace('_', ' ').capitalize() for cat in categories]
+    return f"Suggested for consideration: {', '.join(labels)}"
 
 
 def _evidence_for_signal(signals, signal_name):
@@ -115,7 +123,7 @@ def check_and_create_review_tasks(case_id, interaction_id, assessment, signals):
                     "A reported physical-safety concern needs trained human review. "
                     "This task does not establish that danger is present."
                 ),
-                INTERVENTIONS["physical_safety"],
+                _format_intervention("physical_safety"),
             )
         )
 
@@ -130,7 +138,7 @@ def check_and_create_review_tasks(case_id, interaction_id, assessment, signals):
                     "The interaction includes a reported urgent wellbeing concern that needs trained human review. "
                     "It is not a diagnosis or assessment of intent."
                 ),
-                INTERVENTIONS["wellbeing"],
+                _format_intervention("wellbeing"),
             )
         )
 
@@ -142,7 +150,7 @@ def check_and_create_review_tasks(case_id, interaction_id, assessment, signals):
                 _priority_level(service.get("score", 0), urgent_threshold),
                 "SERVICE_ACCESS",
                 "A reported barrier to support or services needs trained human review.",
-                INTERVENTIONS["service_access"],
+                _format_intervention("service_access"),
             )
         )
 
@@ -157,7 +165,7 @@ def check_and_create_review_tasks(case_id, interaction_id, assessment, signals):
                     "The support-priority estimate increased materially from the prior interaction. "
                     "Review source notes and data-quality limitations before deciding whether to follow up."
                 ),
-                INTERVENTIONS["trend"],
+                _format_intervention("trend"),
             )
         )
     return tasks

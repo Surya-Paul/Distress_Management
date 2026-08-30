@@ -91,28 +91,13 @@ APPROVED_AUTOMATIC_ESCALATION_CHANNELS = ("secure_internal_case_queue",)
 SAFE_OUTREACH_CHANNELS = ("approved_secure_call", "approved_secure_portal")
 SERVICE_DIRECTORY_TYPES = ("emergency", "counselling", "protection", "medical", "legal_aid")
 
-# These are suggested discussion steps. They never trigger a referral,
+# These are suggested categories for discussion. They never trigger a referral,
 # notification, case change, or other action without a trained human reviewer.
-INTERVENTIONS = {
-    "physical_safety": (
-        "A trained staff member should look at the safety concern using the person's "
-        "preferred safe way of being contacted before discussing any protection options "
-        "(such as witness protection or relocation support)."
-    ),
-    "wellbeing": (
-        "A trained counsellor should check in with the person through an agreed safe "
-        "channel and talk about support options they may want (such as counselling "
-        "or medical treatment)."
-    ),
-    "service_access": (
-        "A trained coordinator should talk with the person about any barriers to getting "
-        "help and what support they would prefer (such as financial assistance, legal aid, "
-        "or rehabilitation measures), before making any referral or changing records."
-    ),
-    "trend": (
-        "A trained staff member should look at the change alongside the data's limitations "
-        "before deciding whether a follow-up is needed."
-    ),
+INTERVENTION_CATEGORIES = {
+    "physical_safety": ["witness_protection", "relocation_support"],
+    "wellbeing": ["counselling", "medical_treatment"],
+    "service_access": ["financial_assistance", "legal_aid", "rehabilitation_measures"],
+    "trend": ["case_review"],
 }
 
 DIMENSION_LABELS = {

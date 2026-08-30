@@ -12,6 +12,8 @@ from src.database import (
     get_scoped_case,
     get_scoped_cases,
     get_scoped_interactions,
+    get_scoped_validated_screenings,
+    insert_scoped_interaction,
     save_scoped_interaction_reviewer_override,
 )
 from src.scoring import assess_spi_trend, project_spi_trajectory
@@ -131,6 +133,64 @@ else:
         margin=dict(l=60, r=150, t=60, b=60), showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+st.markdown("### Engagement over time")
+
+# Participation Rate
+recent_interactions = interactions[-5:]
+completed = len(recent_interactions)
+missed = sum(r.get("unanswered_follow_up_count", 0) for r in recent_interactions)
+scheduled = completed + missed
+participation_rate = (completed / scheduled) * 100 if scheduled > 0 else 100.0
+
+# Transcript Shift
+lengths = [len(r.get("transcript_ciphertext", "")) for r in recent_interactions]
+if len(lengths) >= 3:
+    baseline_avg = sum(lengths[:-1]) / (len(lengths) - 1)
+    current = lengths[-1]
+    if baseline_avg > 0:
+        if current < baseline_avg * 0.5:
+            transcript_shift = "Shorter transcripts than historical baseline"
+        elif current > baseline_avg * 1.5:
+            transcript_shift = "Longer transcripts than historical baseline"
+        else:
+            transcript_shift = "Transcript length stable"
+    else:
+        transcript_shift = "Transcript length stable"
+else:
+    transcript_shift = "Insufficient history to establish response length baseline"
+
+# Screening Shift
+screenings = get_scoped_validated_screenings(actor, selected_case, purpose="case_review")
+skip_shift = ""
+if len(screenings) >= 2:
+    recent_screening = screenings[0]
+    older_screenings = screenings[1:5]
+    q_admin = len(recent_screening.get("questions_administered", []))
+    recent_skip_rate = len(recent_screening.get("skipped_item_ids", [])) / q_admin if q_admin else 0
+    
+    older_skip_rates = [
+        len(s.get("skipped_item_ids", [])) / len(s.get("questions_administered", []))
+        for s in older_screenings if s.get("questions_administered")
+    ]
+    avg_older_skip = sum(older_skip_rates) / len(older_skip_rates) if older_skip_rates else 0
+    
+    if recent_skip_rate > avg_older_skip + 0.2:
+        skip_shift = "Increased skip rate on validated questionnaires"
+    elif recent_skip_rate < avg_older_skip - 0.2:
+        skip_shift = "Decreased skip rate on validated questionnaires"
+    else:
+        skip_shift = "Questionnaire completion stable"
+
+shift_message = transcript_shift
+if skip_shift:
+    shift_message += f" • {skip_shift}"
+
+st.info(
+    f"**Participation rate:** {participation_rate:.0f}% of scheduled check-ins completed across the last {completed} interactions.\n\n"
+    f"**Response pattern shift:** {shift_message}"
+)
 
 st.markdown("#### Conversation records")
 for index, (_, row) in enumerate(df.iterrows()):

@@ -58,6 +58,23 @@ with left:
             state = st.text_input(t("p1_state"), value=actor.state or "", placeholder="e.g., Maharashtra")
         with new_case_cols[1]:
             district = st.text_input(t("p1_district"), value=actor.district or "", placeholder="e.g., Pune")
+        
+        case_type_options = {
+            "Rape or gang rape": "rape_or_gang_rape",
+            "Murder, grievous hurt, or arson": "murder_grievous_hurt_or_arson",
+            "Witness intimidation or threats": "witness_intimidation_or_threats",
+            "Caste based violence/family": "caste_based_violence_family",
+            "Compensation/rehabilitation beneficiary": "compensation_rehabilitation_beneficiary",
+            "Other": "other"
+        }
+        selected_type_label = st.selectbox(
+            "Administrative case category", 
+            list(case_type_options.keys()),
+            index=5,
+            help="Select the category based on the FIR/case record. Do not ask the victim this directly."
+        )
+        case_type = case_type_options[selected_type_label]
+
         case_id = "NEW-OPAQUE-CASE"
         st.caption(t("p1_new_case_caption"))
 
@@ -225,7 +242,7 @@ if st.button(
             st.error("Please fill in the State and district to start a new case.")
             st.stop()
         try:
-            case_id = create_scoped_case(actor, state.strip(), district.strip(), purpose="case_review")
+            case_id = create_scoped_case(actor, state.strip(), district.strip(), purpose="case_review", case_type=case_type)
             st.session_state["new_case_created"] = case_id
         except (ValueError, PermissionError) as error:
             st.error(str(error))

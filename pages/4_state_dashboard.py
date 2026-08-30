@@ -119,6 +119,53 @@ else:
     st.info("No priority distribution is available yet.")
 
 st.divider()
+st.markdown("#### Case category breakdown")
+case_type_rows = dashboard.get("case_type_distribution", [])
+ct_p_rows = dashboard.get("case_type_priority_distribution", [])
+
+if case_type_rows:
+    ct_df = pd.DataFrame(case_type_rows)
+    ct_labels = {
+        "rape_or_gang_rape": "Rape or gang rape",
+        "murder_grievous_hurt_or_arson": "Murder, grievous hurt, or arson",
+        "witness_intimidation_or_threats": "Witness intimidation or threats",
+        "caste_based_violence_family": "Caste based violence/family",
+        "compensation_rehabilitation_beneficiary": "Compensation/rehabilitation beneficiary",
+        "other": "Other"
+    }
+    ct_df["case_type_label"] = ct_df["case_type"].map(lambda x: ct_labels.get(x, x.replace("_", " ").title()))
+    
+    urgent_counts = {}
+    if ct_p_rows:
+        ct_p_df = pd.DataFrame(ct_p_rows)
+        urgent_df = ct_p_df[ct_p_df["priority_band"] == "Urgent human review"]
+        urgent_counts = dict(zip(urgent_df["case_type"], urgent_df["count"]))
+    
+    ct_df["urgent_count"] = ct_df["case_type"].map(lambda x: urgent_counts.get(x, 0))
+    ct_df["hover_text"] = ct_df.apply(lambda row: f"Cases: {row['count']}<br>Flagged urgent: {row['urgent_count']}", axis=1)
+
+    chart = go.Figure(
+        go.Bar(
+            x=ct_df["count"],
+            y=ct_df["case_type_label"],
+            orientation="h",
+            marker_color="#3F8EFC",
+            text=ct_df["count"],
+            textposition="auto",
+            hovertemplate="<b>%{y}</b><br>%{customdata}<extra></extra>",
+            customdata=ct_df["hover_text"]
+        )
+    )
+    chart.update_layout(
+        height=320, margin=dict(l=10, r=10, t=10, b=10),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(autorange="reversed"),
+    )
+    st.plotly_chart(chart, use_container_width=True)
+else:
+    st.info("No aggregate case category data is available yet, or counts are below the minimum group size for privacy.")
+
+st.divider()
 if st.button(t("p4_download_button")):
     try:
         exported = export_deidentified_dashboard(actor, purpose="authorised_reporting")
